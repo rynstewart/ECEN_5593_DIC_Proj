@@ -87,6 +87,7 @@ static unsigned int max_insts;
 /*Keep track of cycles*/
 bool_t count_cycle = FALSE;
 counter_t num_cycles = 0;
+counter_t num_cycles_puf_cmp = 0;
 /* register simulator-specific options */
 void
 sim_reg_options(struct opt_odb_t *odb)
@@ -121,8 +122,11 @@ sim_reg_stats(struct stat_sdb_t *sdb)
 		   "total number of instructions executed",
 		   &sim_num_insn, sim_num_insn, NULL);
   stat_reg_counter(sdb, "sim_num_cycles",
-		   "total number of cycles for 2 wide processor",
+		   "total number of cycles for single wide processor",
 		   &num_cycles, 0, NULL);
+  stat_reg_counter(sdb, "sim_num_puf_cycles",
+		   "total number of cycles due to puf compare for DIC",
+		   &num_cycles_puf_cmp, 0, NULL);
   stat_reg_counter(sdb, "sim_num_refs",
 		   "total number of loads and stores executed",
 		   &sim_num_refs, 0, NULL);
@@ -265,6 +269,14 @@ sim_uninit(void)
 /* system call handler macro */
 #define SYSCALL(INST)	sys_syscall(&regs, mem_access, mem, INST, TRUE)
 
+word_t rand_puf(word_t seed)
+{
+  word_t result;
+  srand(seed);
+  result = rand();
+  return result;
+}
+
 /* start simulation, program loaded, processor precise state initialized */
 void
 sim_main(void)
@@ -279,7 +291,9 @@ sim_main(void)
   md_addr_t prev_PC;
   bool_t prev_op_mem = FALSE;
   bool_t prev_branch = FALSE;
-
+  u_int32_t ongoing_puf = 0;
+  u_int32_t count_puf = 0;
+  
   fprintf(stderr, "sim: ** starting functional simulation **\n");
 
   /* set up initial default next PC */
@@ -300,6 +314,25 @@ sim_main(void)
 
       /* get the next instruction to execute */
       MD_FETCH_INST(inst, mem, regs.regs_PC);
+      
+      num_cycles++;
+
+      if(!prev_branch)
+      {
+        ongoing_puf+=rand_puf(inst);
+        count_puf++;
+        fprintf(stderr, "count for puf algo = %d\n", count_puf);
+      }
+      else
+      {
+        //TODO:cmp
+        count_puf = 0;
+        fprintf(stderr, "JUMP! outcome of puf algo = %d\n", ongoing_puf);
+        ongoing_puf = 0;
+        num_cycles++;
+        num_cycles_puf_cmp++;
+        sim_num_insn++;
+      }
 
       /* keep an instruction count */
       sim_num_insn++;
@@ -365,44 +398,50 @@ sim_main(void)
       regs.regs_NPC += sizeof(md_inst_t);
 
       /*update cycles*/
-      if(count_cycle)
-      {
-        count_cycle = FALSE;
-        num_cycles++;
-        /*Hazards*/
-        /*data dependence*/
-        if((prev_RC == RA || prev_RC == RB) && prev_RC != 0)
-        {
-          num_cycles++;
-        }
-        /*mem hazards*/
-        else if((MD_OP_FLAGS(op) & F_MEM) && prev_RB == GPR(RB)+SEXT(OFS)) //RB always mem offset?
-        {
-          num_cycles++;
-        }
-        /*Structural Hazard with Cache*/
-        else if(prev_op_mem && (MD_OP_FLAGS(op) & F_MEM))
-        {
-          num_cycles++;
-        }
-        /*control hazard, no need to double count data and control because if prior 
-        instruction was branch, nothing should have been written*/
-        else if(((prev_PC + sizeof(md_inst_t)) != regs.regs_PC) && prev_branch)
-        {
-          num_cycles += 6;
-        }
-      }
-      else
-      {
-        prev_RC = RC;
-        if(MD_OP_FLAGS(op) & F_MEM)
-        {
-          prev_RB = GPR(RB)+SEXT(OFS);
-        }
-        prev_op_mem = (MD_OP_FLAGS(op) & F_MEM) != 0;
-        count_cycle = TRUE;
-        prev_branch = (MD_OP_FLAGS(op) & F_COND) != 0;
-      }
+      // if(count_cycle)
+      // {
+      //   count_cycle = FALSE;
+      //   num_cycles++;
+      //   /*Hazards*/
+      //   /*data dependence*/
+      //   if((prev_RC == RA || prev_RC == RB) && prev_RC != 0)
+      //   {
+      //     num_cycles++;
+      //   }
+      //   /*mem hazards*/
+      //   else if((MD_OP_FLAGS(op) & F_MEM) && prev_RB == GPR(RB)+SEXT(OFS)) //RB always mem offset?
+      //   {
+      //     num_cycles++;
+      //   }
+      //   /*Structural Hazard with Cache*/
+      //   else if(prev_op_mem && (MD_OP_FLAGS(op) & F_MEM))
+      //   {
+      //     num_cycles++;
+      //   }
+      //   /*control hazard, no need to double count data and control because if prior 
+      //   instruction was branch, nothing should have been written*/
+      //   else if(((prev_PC + sizeof(md_inst_t)) != regs.regs_PC) && prev_branch)
+      //   {
+      //     num_cycles += 6;
+      //   }
+      // }
+      // else
+      // {
+      //   prev_RC = RC;
+      //   if(MD_OP_FLAGS(op) & F_MEM)
+      //   {
+      //     prev_RB = GPR(RB)+SEXT(OFS);
+      //   }
+      //   prev_op_mem = (MD_OP_FLAGS(op) & F_MEM) != 0;
+      //   count_cycle = TRUE;
+
+      // }
+      prev_branch = ((MD_OP_FLAGS(op) & F_DIRJMP) != 0) || 
+                    ((MD_OP_FLAGS(op) & F_INDIRJMP)!= 0) || 
+                    ((MD_OP_FLAGS(op) & F_FPCOND)!= 0) ||
+                    ((MD_OP_FLAGS(op) & F_CALL)!= 0) ||
+                    ((MD_OP_FLAGS(op) & F_UNCOND)!= 0) ||
+                    ((MD_OP_FLAGS(op) & F_COND)!= 0);
 
       /* finish early? */
       if (max_insts && sim_num_insn >= max_insts)
