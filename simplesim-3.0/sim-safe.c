@@ -293,6 +293,8 @@ sim_main(void)
   bool_t prev_branch = FALSE;
   u_int32_t ongoing_puf = 0;
   u_int32_t count_puf = 0;
+  u_int32_t tmp_puf_cmp = 0;
+  FILE *fp = fopen("/home/rynstewart/gokeys.txt", "r");
   
   fprintf(stderr, "sim: ** starting functional simulation **\n");
 
@@ -314,20 +316,29 @@ sim_main(void)
 
       /* get the next instruction to execute */
       MD_FETCH_INST(inst, mem, regs.regs_PC);
-      
+
       num_cycles++;
 
       if(!prev_branch)
       {
         ongoing_puf+=rand_puf(inst);
         count_puf++;
-        fprintf(stderr, "count for puf algo = %d\n", count_puf);
+        //fprintf(stderr, "count for puf algo = %x\n", count_puf);
       }
       else
       {
         //TODO:cmp
         count_puf = 0;
-        fprintf(stderr, "JUMP! outcome of puf algo = %d\n", ongoing_puf);
+        //fprintf(stderr, "%x\n", ongoing_puf);
+        fread(&tmp_puf_cmp, sizeof(u_int32_t), 1, fp);
+        if(num_cycles>20000)
+        // {
+        //   tmp_puf_cmp |= 0x00000001;
+        // }
+        if(tmp_puf_cmp != ongoing_puf)
+        {
+          fatal("puf mismatch! Key: 0x%x, Puf: 0x%x", tmp_puf_cmp, ongoing_puf);
+        }
         ongoing_puf = 0;
         num_cycles++;
         num_cycles_puf_cmp++;
@@ -447,5 +458,5 @@ sim_main(void)
       if (max_insts && sim_num_insn >= max_insts)
 	return;
     }
-    
+  fclose(fp);
 }
